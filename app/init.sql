@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS attendance (
     notes VARCHAR(255) NULL,
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE NULL,
+    deleted_at TIMESTAMP WITH TIME ZONE NULL,
 
     CONSTRAINT chk_check_out_after_check_in CHECK (check_out IS NULL OR check_out >= check_in),
 
