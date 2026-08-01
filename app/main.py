@@ -15,10 +15,7 @@ from sqlalchemy.orm import Session
 
 load_dotenv()
 
-try:
-    from .database import get_db, initialize_database
-except ImportError:
-    from database import get_db, initialize_database
+from app.database import get_db, initialize_database
 
 
 class AttendanceCreateRequest(BaseModel):
@@ -90,10 +87,14 @@ async def jwt_middleware(request: Request, call_next):
         return await call_next(request)
 
     auth = request.headers.get("Authorization")
-    if not auth or not auth.lower().startswith("bearer "):
+    if not auth:
         return error_response("Missing or invalid Authorization header", status_code=401)
 
-    token = auth.split(" ", 1)[1]
+    parts = auth.split()
+    if len(parts) != 2 or parts[0].lower() != "bearer":
+        return error_response("Missing or invalid Authorization header", status_code=401)
+
+    token = parts[1]
     try:
         verify_token(token)
     except HTTPException as exc:
@@ -196,8 +197,8 @@ def login():
     )
 
 
-@app.post("/attendance", status_code=201)
-def record_attendance(payload: AttendanceCreateRequest, db: Session = Depends(get_db)):
+@app.post("/attendances", status_code=201)
+def create_attendance(payload: AttendanceCreateRequest, db: Session = Depends(get_db)):
     employee = db.execute(
         text("SELECT id, name FROM employee WHERE id = :employee_id"),
         {"employee_id": payload.employee_id},
@@ -278,12 +279,13 @@ def record_attendance(payload: AttendanceCreateRequest, db: Session = Depends(ge
     )
 
 
-@app.get("/attendances/filter")
-def filter_attendances(
+@app.get("/attendances")
+def list_attendances(
     db: Session = Depends(get_db),
     status: Optional[str] = Query(default=None),
     date: Optional[date] = Query(default=None),
     employee_name: Optional[str] = Query(default=None),
+    sort: str = Query(default="desc"),
     page: int = Query(default=1, ge=1),
     per_page: int = Query(default=10, ge=1, le=100),
 ):
@@ -292,7 +294,11 @@ def filter_attendances(
     if normalized_status is not None and normalized_status not in allowed_status:
         raise HTTPException(status_code=400, detail="status must be one of: Present, Sick, Leave, Absent")
 
-    query_parts = ["SELECT a.id, a.employee_id, a.employee_name, a.attendance_date, a.check_in, a.check_out, a.status, a.notes, a.created_at, a.updated_at FROM attendance a WHERE 1=1 AND a.deleted_at IS NULL"]
+    sort_order = sort.lower()
+    if sort_order not in {"asc", "desc"}:
+        raise HTTPException(status_code=400, detail="sort must be either asc or desc")
+
+    query_parts = ["SELECT a.id, a.employee_id, a.employee_name, a.attendance_date, a.check_in, a.check_out, a.status, a.notes, a.created_at, a.updated_at FROM attendance a WHERE a.deleted_at IS NULL"]
     params = {}
 
     if normalized_status:
@@ -307,7 +313,7 @@ def filter_attendances(
         query_parts.append("AND LOWER(a.employee_name) LIKE LOWER(:employee_name)")
         params["employee_name"] = f"%{employee_name}%"
 
-    count_query = "SELECT COUNT(*) FROM attendance a WHERE 1=1 AND a.deleted_at IS NULL"
+    count_query = "SELECT COUNT(*) FROM attendance a WHERE a.deleted_at IS NULL"
     if normalized_status:
         count_query += " AND a.status = :status"
     if date:
@@ -315,75 +321,14 @@ def filter_attendances(
     if employee_name:
         count_query += " AND LOWER(a.employee_name) LIKE LOWER(:employee_name)"
 
-    query_parts.append("ORDER BY a.attendance_date DESC, a.employee_id ASC")
+    order_direction = "ASC" if sort_order == "asc" else "DESC"
+    query_parts.append(f"ORDER BY a.attendance_date {order_direction}, a.employee_id ASC")
     query_parts.append("LIMIT :limit OFFSET :offset")
 
     total_rows = db.execute(text(count_query), params).scalar_one()
     rows = db.execute(
         text(" ".join(query_parts)),
         {**params, "limit": per_page, "offset": (page - 1) * per_page},
-    ).fetchall()
-
-    attendances = []
-    for row in rows:
-        attendances.append(
-            {
-                "id": row.id,
-                "employee_id": row.employee_id,
-                "employee_name": row.employee_name,
-                "attendance_date": str(row.attendance_date),
-                "check_in": str(row.check_in) if row.check_in else None,
-                "check_out": str(row.check_out) if row.check_out else None,
-                "status": row.status,
-                "notes": row.notes,
-                "created_at": row.created_at.isoformat() if row.created_at else None,
-                "updated_at": row.updated_at.isoformat() if row.updated_at else None,
-            }
-        )
-
-    total_pages = (total_rows + per_page - 1) // per_page if total_rows else 1
-
-    return success_response(
-        "Attendances filtered successfully",
-        {
-            "page": page,
-            "per_page": per_page,
-            "total_items": total_rows,
-            "total_pages": total_pages,
-            "items": attendances,
-        },
-    )
-
-
-@app.get("/attendances")
-def list_attendances(
-    db: Session = Depends(get_db),
-    page: int = Query(default=1, ge=1),
-    per_page: int = Query(default=10, ge=1, le=100),
-):
-    total_rows = db.execute(text("SELECT COUNT(*) FROM attendance WHERE deleted_at IS NULL")).scalar_one()
-
-    rows = db.execute(
-        text(
-            """
-            SELECT
-                a.id,
-                a.employee_id,
-                a.employee_name,
-                a.attendance_date,
-                a.check_in,
-                a.check_out,
-                a.status,
-                a.notes,
-                a.created_at,
-                a.updated_at
-            FROM attendance a
-            WHERE a.deleted_at IS NULL
-            ORDER BY a.attendance_date DESC, a.employee_id ASC
-            LIMIT :limit OFFSET :offset
-            """
-        ),
-        {"limit": per_page, "offset": (page - 1) * per_page},
     ).fetchall()
 
     attendances = []
@@ -417,7 +362,7 @@ def list_attendances(
     )
 
 
-@app.get("/attendance/{attendance_id}")
+@app.get("/attendances/{attendance_id}")
 def get_attendance(attendance_id: int, db: Session = Depends(get_db)):
     row = db.execute(
         text(
