@@ -5,3 +5,4 @@ psycopg2-binary>=2.9.0
 python-dotenv
 PyJWT>=2.8.0
 pytest>=8.0.0
+alembic>=1.11.0

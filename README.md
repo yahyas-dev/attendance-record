@@ -13,7 +13,23 @@ Aplikasi akan berjalan di:
 - API: http://localhost:8080
 - Dokumentasi Swagger: http://localhost:8080/docs
 
-### 2. Login untuk mendapatkan token JWT
+### 2. Menggunakan Alembic untuk Migrasi Database
+
+Setelah menginstal dependency, jalankan migrasi Alembic dengan:
+
+```bash
+source .venv/bin/activate
+export DATABASE_URL='postgresql://myuser:mysecretpassword@localhost:5432/techtest_db'
+alembic upgrade head
+```
+
+Jika database sudah berisi schema awal, gunakan:
+
+```bash
+alembic stamp head
+```
+
+### 3. Login untuk mendapatkan token JWT
 Endpoint login tersedia di:
 ```http
 POST /login
