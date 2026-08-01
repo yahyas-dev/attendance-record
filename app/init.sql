@@ -24,10 +24,12 @@ CREATE TABLE IF NOT EXISTS attendance (
 
     CONSTRAINT chk_check_out_after_check_in CHECK (check_out IS NULL OR check_out >= check_in),
 
-    CONSTRAINT chk_present_requires_check_in CHECK (status != 'Present' OR check_in IS NOT NULL),
-
-    CONSTRAINT unique_employee_daily_attendance UNIQUE (employee_id, attendance_date)
+    CONSTRAINT chk_present_requires_check_in CHECK (status != 'Present' OR check_in IS NOT NULL)
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS unique_active_employee_daily_attendance
+ON attendance (employee_id, attendance_date)
+WHERE deleted_at IS NULL;
 
 INSERT INTO employee (id, name) VALUES 
     (1, 'John Doe'),

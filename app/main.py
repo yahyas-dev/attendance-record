@@ -217,6 +217,7 @@ def record_attendance(payload: AttendanceCreateRequest, db: Session = Depends(ge
             FROM attendance
             WHERE employee_id = :employee_id
               AND attendance_date = :attendance_date
+              AND deleted_at IS NULL
             """
         ),
         {"employee_id": payload.employee_id, "attendance_date": attendance_date},

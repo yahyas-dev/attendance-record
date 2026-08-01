@@ -110,10 +110,12 @@ Pemilihan tipe data dibuat agar data presensi lebih konsisten dan sesuai dengan 
 
 ## Cara Mencegah Data Presensi Ganda
 
-Untuk mencegah data presensi ganda, digunakan constraint unik pada kombinasi:
+Untuk mencegah data presensi ganda, digunakan unique index aktif yang hanya memeriksa baris non-soft-delete:
 
 ```sql
-UNIQUE (employee_id, attendance_date)
+CREATE UNIQUE INDEX unique_active_employee_daily_attendance
+ON attendance (employee_id, attendance_date)
+WHERE deleted_at IS NULL;
 ```
 
-Artinya, satu karyawan hanya boleh memiliki satu data presensi per tanggal. Saat endpoint create dipanggil untuk tanggal yang sama, sistem akan menolak permintaan dengan status 409 Conflict dan mengarahkan pengguna untuk menggunakan endpoint PUT untuk memperbarui data yang sudah ada. Hal ini menjaga integritas data dan memisahkan alur create dan update secara jelas.
+Artinya, satu karyawan hanya boleh memiliki satu data presensi aktif per tanggal. Jika baris presensi sudah di-soft-delete, maka entri baru untuk karyawan yang sama dan tanggal yang sama masih diperbolehkan. Saat endpoint create dipanggil untuk tanggal yang sama pada data aktif, sistem akan menolak permintaan dengan status 409 Conflict dan mengarahkan pengguna untuk menggunakan endpoint PUT untuk memperbarui data yang sudah ada.
