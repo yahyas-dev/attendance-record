@@ -272,6 +272,7 @@ def filter_attendances(
     db: Session = Depends(get_db),
     status: Optional[str] = Query(default=None),
     date: Optional[date] = Query(default=None),
+    employee_name: Optional[str] = Query(default=None),
     page: int = Query(default=1, ge=1),
     per_page: int = Query(default=10, ge=1, le=100),
 ):
@@ -291,11 +292,17 @@ def filter_attendances(
         query_parts.append("AND a.attendance_date = :attendance_date")
         params["attendance_date"] = date.strftime("%Y-%m-%d")
 
+    if employee_name:
+        query_parts.append("AND LOWER(a.employee_name) LIKE LOWER(:employee_name)")
+        params["employee_name"] = f"%{employee_name}%"
+
     count_query = "SELECT COUNT(*) FROM attendance a WHERE 1=1 AND a.deleted_at IS NULL"
     if normalized_status:
         count_query += " AND a.status = :status"
     if date:
         count_query += " AND a.attendance_date = :attendance_date"
+    if employee_name:
+        count_query += " AND LOWER(a.employee_name) LIKE LOWER(:employee_name)"
 
     query_parts.append("ORDER BY a.attendance_date DESC, a.employee_id ASC")
     query_parts.append("LIMIT :limit OFFSET :offset")
