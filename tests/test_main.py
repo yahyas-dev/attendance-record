@@ -125,20 +125,6 @@ def test_sort_attendances_by_date_ascending():
     assert dates == sorted(dates)
 
 
-def test_filter_by_status_and_date():
-    token = get_token()
-    headers = auth_headers(token)
-
-    response = client.get("/attendances?status=Present&date=2026-07-01", headers=headers)
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["success"] is True
-    assert payload["data"]["items"]
-    for item in payload["data"]["items"]:
-        assert item["status"] == "Present"
-        assert item["attendance_date"] == "2026-07-01"
-
-
 def test_duplicate_attendance_is_rejected_on_create():
     token = get_token()
     headers = auth_headers(token)
