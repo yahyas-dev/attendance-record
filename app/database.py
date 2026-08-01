@@ -26,6 +26,14 @@ def run_init_sql():
 
         with engine.begin() as connection:
             connection.exec_driver_sql(sql_script)
+            # Ensure soft-delete column exists
+            try:
+                connection.exec_driver_sql(
+                    "ALTER TABLE attendance ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP WITH TIME ZONE NULL;"
+                )
+            except Exception:
+                # best-effort: ignore if table doesn't exist yet
+                pass
 
         print("✅ Berhasil eksekusi init.sql!")
     except Exception as e:

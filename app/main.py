@@ -236,6 +236,7 @@ def record_attendance(payload: AttendanceCreateRequest, db: Session = Depends(ge
                 check_out = EXCLUDED.check_out,
                 status = EXCLUDED.status,
                 notes = EXCLUDED.notes,
+                deleted_at = NULL,
                 updated_at = CURRENT_TIMESTAMP
             RETURNING id
             """
@@ -279,7 +280,7 @@ def filter_attendances(
     if normalized_status is not None and normalized_status not in allowed_status:
         raise HTTPException(status_code=400, detail="status must be one of: Present, Sick, Leave, Absent")
 
-    query_parts = ["SELECT a.id, a.employee_id, a.employee_name, a.attendance_date, a.check_in, a.check_out, a.status, a.notes, a.created_at, a.updated_at FROM attendance a WHERE 1=1"]
+    query_parts = ["SELECT a.id, a.employee_id, a.employee_name, a.attendance_date, a.check_in, a.check_out, a.status, a.notes, a.created_at, a.updated_at FROM attendance a WHERE 1=1 AND a.deleted_at IS NULL"]
     params = {}
 
     if normalized_status:
@@ -290,7 +291,7 @@ def filter_attendances(
         query_parts.append("AND a.attendance_date = :attendance_date")
         params["attendance_date"] = date.strftime("%Y-%m-%d")
 
-    count_query = "SELECT COUNT(*) FROM attendance a WHERE 1=1"
+    count_query = "SELECT COUNT(*) FROM attendance a WHERE 1=1 AND a.deleted_at IS NULL"
     if normalized_status:
         count_query += " AND a.status = :status"
     if date:
@@ -342,7 +343,7 @@ def list_attendances(
     page: int = Query(default=1, ge=1),
     per_page: int = Query(default=10, ge=1, le=100),
 ):
-    total_rows = db.execute(text("SELECT COUNT(*) FROM attendance")).scalar_one()
+    total_rows = db.execute(text("SELECT COUNT(*) FROM attendance WHERE deleted_at IS NULL")).scalar_one()
 
     rows = db.execute(
         text(
@@ -359,6 +360,7 @@ def list_attendances(
                 a.created_at,
                 a.updated_at
             FROM attendance a
+            WHERE a.deleted_at IS NULL
             ORDER BY a.attendance_date DESC, a.employee_id ASC
             LIMIT :limit OFFSET :offset
             """
@@ -414,7 +416,7 @@ def get_attendance(attendance_id: int, db: Session = Depends(get_db)):
                 a.created_at,
                 a.updated_at
             FROM attendance a
-            WHERE a.id = :attendance_id
+            WHERE a.id = :attendance_id AND a.deleted_at IS NULL
             """
         ),
         {"attendance_id": attendance_id},
@@ -440,7 +442,7 @@ def get_attendance(attendance_id: int, db: Session = Depends(get_db)):
 @app.put("/attendances/{attendance_id}")
 def update_attendance(attendance_id: int, payload: AttendanceCreateRequest, db: Session = Depends(get_db)):
     existing = db.execute(
-        text("SELECT id FROM attendance WHERE id = :attendance_id"),
+        text("SELECT id FROM attendance WHERE id = :attendance_id AND deleted_at IS NULL"),
         {"attendance_id": attendance_id},
     ).fetchone()
 
@@ -504,14 +506,17 @@ def update_attendance(attendance_id: int, payload: AttendanceCreateRequest, db: 
 @app.delete("/attendances/{attendance_id}")
 def delete_attendance(attendance_id: int, db: Session = Depends(get_db)):
     existing = db.execute(
-        text("SELECT id FROM attendance WHERE id = :attendance_id"),
+        text("SELECT id FROM attendance WHERE id = :attendance_id AND deleted_at IS NULL"),
         {"attendance_id": attendance_id},
     ).fetchone()
 
     if not existing:
         raise HTTPException(status_code=404, detail="Attendance not found")
 
-    db.execute(text("DELETE FROM attendance WHERE id = :attendance_id"), {"attendance_id": attendance_id})
+    db.execute(
+        text("UPDATE attendance SET deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = :attendance_id"),
+        {"attendance_id": attendance_id},
+    )
     db.commit()
 
     return success_response("Attendance deleted successfully", {"id": attendance_id})
