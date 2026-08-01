@@ -10,6 +10,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 load_dotenv()
@@ -209,50 +210,59 @@ def record_attendance(payload: AttendanceCreateRequest, db: Session = Depends(ge
     check_in = payload.check_in.strftime("%H:%M:%S") if payload.check_in else None
     check_out = payload.check_out.strftime("%H:%M:%S") if payload.check_out else None
 
-    result = db.execute(
+    duplicate = db.execute(
         text(
             """
-            INSERT INTO attendance (
-                employee_id,
-                employee_name,
-                attendance_date,
-                check_in,
-                check_out,
-                status,
-                notes
-            ) VALUES (
-                :employee_id,
-                :employee_name,
-                :attendance_date,
-                :check_in,
-                :check_out,
-                :status,
-                :notes
-            )
-            ON CONFLICT (employee_id, attendance_date)
-            DO UPDATE SET
-                employee_name = EXCLUDED.employee_name,
-                check_in = EXCLUDED.check_in,
-                check_out = EXCLUDED.check_out,
-                status = EXCLUDED.status,
-                notes = EXCLUDED.notes,
-                deleted_at = NULL,
-                updated_at = CURRENT_TIMESTAMP
-            RETURNING id
+            SELECT id
+            FROM attendance
+            WHERE employee_id = :employee_id
+              AND attendance_date = :attendance_date
             """
         ),
-        {
-            "employee_id": payload.employee_id,
-            "employee_name": employee.name,
-            "attendance_date": attendance_date,
-            "check_in": check_in,
-            "check_out": check_out,
-            "status": payload.status,
-            "notes": payload.notes,
-        },
+        {"employee_id": payload.employee_id, "attendance_date": attendance_date},
     ).fetchone()
 
-    db.commit()
+    if duplicate:
+        raise HTTPException(status_code=409, detail="Attendance already exists for this employee and date. Use PUT to update it.")
+
+    try:
+        result = db.execute(
+            text(
+                """
+                INSERT INTO attendance (
+                    employee_id,
+                    employee_name,
+                    attendance_date,
+                    check_in,
+                    check_out,
+                    status,
+                    notes
+                ) VALUES (
+                    :employee_id,
+                    :employee_name,
+                    :attendance_date,
+                    :check_in,
+                    :check_out,
+                    :status,
+                    :notes
+                )
+                RETURNING id
+                """
+            ),
+            {
+                "employee_id": payload.employee_id,
+                "employee_name": employee.name,
+                "attendance_date": attendance_date,
+                "check_in": check_in,
+                "check_out": check_out,
+                "status": payload.status,
+                "notes": payload.notes,
+            },
+        ).fetchone()
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Attendance already exists for this employee and date. Use PUT to update it.") from exc
 
     return success_response(
         "Attendance created successfully",
