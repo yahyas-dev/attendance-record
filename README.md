@@ -116,4 +116,4 @@ Untuk mencegah data presensi ganda, digunakan constraint unik pada kombinasi:
 UNIQUE (employee_id, attendance_date)
 ```
 
-Artinya, satu karyawan hanya boleh memiliki satu data presensi per tanggal. Saat endpoint create dipanggil untuk tanggal yang sama, sistem akan melakukan update data yang sudah ada, bukan menambahkan entri baru. Hal ini mencegah duplikasi dan menjaga integritas data.
+Artinya, satu karyawan hanya boleh memiliki satu data presensi per tanggal. Saat endpoint create dipanggil untuk tanggal yang sama, sistem akan menolak permintaan dengan status 409 Conflict dan mengarahkan pengguna untuk menggunakan endpoint PUT untuk memperbarui data yang sudah ada. Hal ini menjaga integritas data dan memisahkan alur create dan update secara jelas.
