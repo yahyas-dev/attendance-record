@@ -84,8 +84,8 @@ python -m pytest -q tests/test_main.py
 Aplikasi ini dirancang sebagai backend presensi dengan arsitektur sederhana namun terstruktur:
 
 - Layer API: semua endpoint disimpan di app/main.py.
-- Layer Database: koneksi dan inisialisasi database di app/database.py.
-- Layer Schema: struktur tabel dan seed data didefinisikan di app/init.sql.
+- Layer Database: koneksi database di app/database.py.
+- Layer Schema: migrasi database dikelola oleh Alembic; app/init.sql kini hanya sebagai referensi schema awal.
 
 Fitur utama yang tersedia:
 - Login untuk menghasilkan JWT
