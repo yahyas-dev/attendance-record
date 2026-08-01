@@ -1,13 +1,18 @@
+import os
 from contextlib import asynccontextmanager
-from datetime import date, time
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Optional
 
+import jwt
+from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import text
 from sqlalchemy.orm import Session
+
+load_dotenv()
 
 try:
     from .database import get_db, initialize_database
@@ -49,6 +54,53 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 
 
+def get_jwt_settings():
+    secret_key = os.getenv("JWT_SECRET_KEY")
+    if not secret_key:
+        raise RuntimeError("JWT_SECRET_KEY is not configured")
+
+    algorithm = os.getenv("JWT_ALGORITHM", "HS256")
+    expires_minutes = int(os.getenv("JWT_ACCESS_TOKEN_EXPIRES", "30"))
+    return secret_key, algorithm, expires_minutes
+
+
+def verify_token(token: str):
+    secret_key, algorithm, _ = get_jwt_settings()
+    try:
+        payload = jwt.decode(token, secret_key, algorithms=[algorithm])
+        return payload
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token expired")
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+
+@app.middleware("http")
+async def jwt_middleware(request: Request, call_next):
+    # Paths that do not require authentication
+    exempt_paths = {"/", "/login", "/db-check", "/openapi.json", "/docs", "/redoc"}
+    path = request.url.path
+
+    if path in exempt_paths or path.startswith("/docs") or path.startswith("/openapi"):
+        return await call_next(request)
+
+    # Allow CORS preflight
+    if request.method == "OPTIONS":
+        return await call_next(request)
+
+    auth = request.headers.get("Authorization")
+    if not auth or not auth.lower().startswith("bearer "):
+        return error_response("Missing or invalid Authorization header", status_code=401)
+
+    token = auth.split(" ", 1)[1]
+    try:
+        verify_token(token)
+    except HTTPException as exc:
+        return error_response(str(exc.detail), status_code=exc.status_code)
+
+    return await call_next(request)
+
+
 def format_time(value):
     if value is None:
         return None
@@ -69,6 +121,23 @@ def error_response(message: str, errors=None, status_code: int = 400):
     if errors is not None:
         payload["errors"] = errors
     return JSONResponse(status_code=status_code, content=payload)
+
+
+def normalize_status(status: Optional[str]) -> Optional[str]:
+    if status is None:
+        return None
+
+    cleaned = status.strip()
+    if not cleaned:
+        return None
+
+    mapping = {
+        "present": "Present",
+        "sick": "Sick",
+        "leave": "Leave",
+        "absent": "Absent",
+    }
+    return mapping.get(cleaned.lower(), cleaned)
 
 
 @app.exception_handler(RequestValidationError)
@@ -98,6 +167,32 @@ def read_root():
 def test_db(db: Session = Depends(get_db)):
     result = db.execute(text("SELECT version();")).fetchone()
     return {"status": "Koneksi DB Sukses", "version": result[0]}
+
+
+@app.post("/login")
+def login():
+    try:
+        secret_key, algorithm, expires_minutes = get_jwt_settings()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    now = datetime.now(timezone.utc)
+    expiration = now + timedelta(minutes=expires_minutes)
+    token_payload = {
+        "sub": "anonymous",
+        "iat": int(now.timestamp()),
+        "exp": int(expiration.timestamp()),
+    }
+    token = jwt.encode(token_payload, secret_key, algorithm=algorithm)
+
+    return success_response(
+        "Login successful",
+        {
+            "access_token": token,
+            "token_type": "bearer",
+            "expires_in": expires_minutes * 60,
+        },
+    )
 
 
 @app.post("/attendance", status_code=201)
@@ -171,6 +266,76 @@ def record_attendance(payload: AttendanceCreateRequest, db: Session = Depends(ge
     )
 
 
+@app.get("/attendances/filter")
+def filter_attendances(
+    db: Session = Depends(get_db),
+    status: Optional[str] = Query(default=None),
+    date: Optional[date] = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    per_page: int = Query(default=10, ge=1, le=100),
+):
+    normalized_status = normalize_status(status)
+    allowed_status = {"Present", "Sick", "Leave", "Absent"}
+    if normalized_status is not None and normalized_status not in allowed_status:
+        raise HTTPException(status_code=400, detail="status must be one of: Present, Sick, Leave, Absent")
+
+    query_parts = ["SELECT a.id, a.employee_id, a.employee_name, a.attendance_date, a.check_in, a.check_out, a.status, a.notes, a.created_at, a.updated_at FROM attendance a WHERE 1=1"]
+    params = {}
+
+    if normalized_status:
+        query_parts.append("AND a.status = :status")
+        params["status"] = normalized_status
+
+    if date:
+        query_parts.append("AND a.attendance_date = :attendance_date")
+        params["attendance_date"] = date.strftime("%Y-%m-%d")
+
+    count_query = "SELECT COUNT(*) FROM attendance a WHERE 1=1"
+    if normalized_status:
+        count_query += " AND a.status = :status"
+    if date:
+        count_query += " AND a.attendance_date = :attendance_date"
+
+    query_parts.append("ORDER BY a.attendance_date DESC, a.employee_id ASC")
+    query_parts.append("LIMIT :limit OFFSET :offset")
+
+    total_rows = db.execute(text(count_query), params).scalar_one()
+    rows = db.execute(
+        text(" ".join(query_parts)),
+        {**params, "limit": per_page, "offset": (page - 1) * per_page},
+    ).fetchall()
+
+    attendances = []
+    for row in rows:
+        attendances.append(
+            {
+                "id": row.id,
+                "employee_id": row.employee_id,
+                "employee_name": row.employee_name,
+                "attendance_date": str(row.attendance_date),
+                "check_in": str(row.check_in) if row.check_in else None,
+                "check_out": str(row.check_out) if row.check_out else None,
+                "status": row.status,
+                "notes": row.notes,
+                "created_at": row.created_at.isoformat() if row.created_at else None,
+                "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+            }
+        )
+
+    total_pages = (total_rows + per_page - 1) // per_page if total_rows else 1
+
+    return success_response(
+        "Attendances filtered successfully",
+        {
+            "page": page,
+            "per_page": per_page,
+            "total_items": total_rows,
+            "total_pages": total_pages,
+            "items": attendances,
+        },
+    )
+
+
 @app.get("/attendances")
 def list_attendances(
     db: Session = Depends(get_db),
@@ -233,12 +398,7 @@ def list_attendances(
 
 
 @app.get("/attendance/{attendance_id}")
-def get_attendance(
-    attendance_id: int,
-    db: Session = Depends(get_db),
-    page: int = Query(default=1, ge=1),
-    per_page: int = Query(default=1, ge=1, le=100),
-):
+def get_attendance(attendance_id: int, db: Session = Depends(get_db)):
     row = db.execute(
         text(
             """
@@ -263,24 +423,16 @@ def get_attendance(
     if not row:
         raise HTTPException(status_code=404, detail="Attendance not found")
 
-    item = {
-        "id": row.id,
-        "employee_name": row.employee_name,
-        "attendance_date": str(row.attendance_date),
-        "check_in": format_time(row.check_in),
-        "check_out": format_time(row.check_out),
-        "status": row.status,
-        "notes": row.notes,
-    }
-
     return success_response(
         "Attendance retrieved successfully",
         {
-            "page": page,
-            "per_page": per_page,
-            "total_items": 1,
-            "total_pages": 1,
-            "items": [item],
+            "id": row.id,
+            "employee_name": row.employee_name,
+            "attendance_date": str(row.attendance_date),
+            "check_in": format_time(row.check_in),
+            "check_out": format_time(row.check_out),
+            "status": row.status,
+            "notes": row.notes,
         },
     )
 
