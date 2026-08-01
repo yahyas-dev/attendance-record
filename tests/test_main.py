@@ -7,7 +7,7 @@ from app.main import app
 client = TestClient(app)
 
 TEST_EMPLOYEE_ID = 1
-TEST_ATTENDANCE_DATE = date(2099, 12, 31)
+TEST_ATTENDANCE_DATE = date(2200, 1, 3)
 
 
 def get_token() -> str:
@@ -91,3 +91,44 @@ def test_filter_by_employee_name():
     assert isinstance(payload["data"]["items"], list)
     for item in payload["data"]["items"]:
         assert "john" in item["employee_name"].lower()
+
+
+def test_filter_by_status_and_date():
+    token = get_token()
+    headers = auth_headers(token)
+
+    response = client.get("/attendances/filter?status=Present&date=2026-07-01", headers=headers)
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["success"] is True
+    assert payload["data"]["items"]
+    for item in payload["data"]["items"]:
+        assert item["status"] == "Present"
+        assert item["attendance_date"] == "2026-07-01"
+
+
+def test_duplicate_attendance_is_rejected_on_create():
+    token = get_token()
+    headers = auth_headers(token)
+
+    payload = {
+        "employee_id": TEST_EMPLOYEE_ID,
+        "attendance_date": "2200-01-04",
+        "check_in": "08:00:00",
+        "check_out": "17:00:00",
+        "status": "Present",
+        "notes": "Duplicate prevention check",
+    }
+
+    first_response = client.post("/attendance", json=payload, headers=headers)
+    assert first_response.status_code == 201
+
+    second_response = client.post("/attendance", json={**payload, "notes": "Attempted duplicate"}, headers=headers)
+    assert second_response.status_code == 409
+    assert second_response.json()["success"] is False
+
+    list_response = client.get("/attendances/filter?date=2200-01-04", headers=headers)
+    assert list_response.status_code == 200
+    items = list_response.json()["data"]["items"]
+    assert len(items) == 1
+    assert items[0]["notes"] == "Duplicate prevention check"
