@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 load_dotenv()
 
-from app.database import get_db, initialize_database
+from app.database import get_db
 
 
 class AttendanceCreateRequest(BaseModel):
@@ -43,13 +43,7 @@ class AttendanceCreateRequest(BaseModel):
         return self
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    initialize_database()
-    yield
-
-
-app = FastAPI(lifespan=lifespan)
+app = FastAPI()
 
 
 def get_jwt_settings():
